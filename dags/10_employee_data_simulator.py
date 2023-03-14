@@ -39,7 +39,8 @@ def employees():
         file = r"./dags/data/employees.csv"
         local_employees = read_csv(file)
         filter_employees_by_year_of_birth(local_employees) \
-            .to_json(f'./dags/data/oldies_{now()}.json', orient='records')
+            .filter(items=["UserId", "FirstName", "LastName"]) \
+            .to_json(f'./dags/results/oldies_{now()}.json', orient='records')
 
     data_validation()
 
