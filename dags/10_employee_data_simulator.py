@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from airflow.decorators import dag, task
-from pandas import read_csv
+from pandas import DataFrame, read_csv, read_json, read_sql_query
+import sqlalchemy
 
 default_args = {
     "owner": "fdodino",
@@ -8,23 +9,32 @@ default_args = {
     "retry_delay": timedelta(minutes=2)
 }
 
+# constants
+EMPLOYEE_INPUT_CSV_FILE = r"./dags/data/employees.csv"
+EMPLOYEES_OUTPUT_CSV_FILE = r"./dags/results/special_employees.csv"
+
+# establish connection to PostgreSQL
+engine = sqlalchemy.create_engine(
+    'postgresql://airflow:airflow@postgres:5432/airflow'
+)
+
 
 def now():
-    return datetime.now().strftime(r'%Y%m%d%H%M%S')
+    return datetime.now().strftime(r"%Y%m%d%H%M%S")
 
 
 # internal transformation function
 def year_of_birth(date_of_birth):
     return datetime.strptime(
-        date_of_birth, '%Y-%m-%d'
+        date_of_birth, "%Y-%m-%d"
     ).year
 
 
 # validation hook function
-def filter_employees_by_year_of_birth(local_employees):
-    local_employees['YearOfBirth'] = local_employees['DateOfBirth'] \
+def filter_employees_by_year_of_birth(employees):
+    employees["YearOfBirth"] = employees["DateOfBirth"] \
         .apply(year_of_birth)
-    return local_employees[local_employees['YearOfBirth'] < 1950]
+    return employees[employees["YearOfBirth"] < 1950]
 
 
 @dag(
@@ -35,14 +45,34 @@ def filter_employees_by_year_of_birth(local_employees):
 )
 def employees():
     @task
-    def data_validation():
-        file = r"./dags/data/employees.csv"
-        local_employees = read_csv(file)
-        filter_employees_by_year_of_birth(local_employees) \
+    def data_validation(ti=None):
+        original_employees = read_csv(EMPLOYEE_INPUT_CSV_FILE)
+        oldies_file = f"./dags/results/oldies_{now()}.json"
+        filter_employees_by_year_of_birth(original_employees) \
             .filter(items=["UserId", "FirstName", "LastName"]) \
-            .to_json(f'./dags/results/oldies_{now()}.json', orient='records')
+            .to_json(oldies_file, orient="records")
+        return oldies_file
 
-    data_validation()
+    @task
+    def insert_employees(ti=None):
+        oldies_file = ti.xcom_pull(task_ids="data_validation")
+        original_employees = read_json(oldies_file).rename(columns={
+            "UserId": "id",
+            "FirstName": "first_name",
+            "LastName": "last_name"
+        })
+        original_employees \
+            .to_sql("employees", con=engine,
+                    if_exists="replace", index=False)
+
+    @task
+    def read_employees():
+        query_employees = read_sql_query('''
+            SELECT id, first_name, last_name FROM "employees";
+        ''', engine)
+        DataFrame(query_employees).to_csv(EMPLOYEES_OUTPUT_CSV_FILE)
+
+    data_validation() >> insert_employees() >> read_employees()
 
 
 employees()
