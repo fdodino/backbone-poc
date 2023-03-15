@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from airflow.decorators import dag, task
 from pandas import DataFrame, read_csv, read_json, read_sql_query
 import sqlalchemy
+from airflow.models import Variable
 
 default_args = {
     "owner": "fdodino",
@@ -14,9 +15,8 @@ EMPLOYEE_INPUT_CSV_FILE = r"./dags/data/employees.csv"
 EMPLOYEES_OUTPUT_CSV_FILE = r"./dags/results/special_employees.csv"
 
 # establish connection to PostgreSQL
-engine = sqlalchemy.create_engine(
-    'postgresql://airflow:airflow@postgres:5432/airflow'
-)
+connection_string = Variable.get("POSTGRES_CONNECTION")
+engine = sqlalchemy.create_engine(connection_string)
 
 
 def now():
@@ -31,12 +31,19 @@ def year_of_birth(date_of_birth):
 
 
 # validation hook function
+# we create a calculated column for the data frame (in memory),
+# in order to create a pandas filter
 def filter_employees_by_year_of_birth(employees):
     employees["YearOfBirth"] = employees["DateOfBirth"] \
         .apply(year_of_birth)
     return employees[employees["YearOfBirth"] < 1950]
 
 
+# In this example we
+# - take an employee csv file as input
+# - we filter those employees born before 1950
+# - and create a json file using some of the fields
+# - the JSON file
 @dag(
     dag_id="10_employee_data_simulator",
     description="DAG for employees - PoC",
