@@ -4,6 +4,16 @@ from pandas import DataFrame, read_csv, read_json, read_sql_query
 import sqlalchemy
 from airflow.models import Variable
 
+# This version has a few anti-patterns
+# 1. importing sqlalchemy & connecting manually in Python top level
+# 2. writing in local files is discouraged
+# 3. there are some top level functions that could be inner functions since
+#    we don't need to reuse them
+# 4. using now() function is not bad since they allow us to define the name
+#    of the file
+#
+# Good practice: replacing the values in the table avoids duplicate records
+#
 default_args = {
     "owner": "fdodino",
     "retries": 2,
@@ -45,7 +55,7 @@ def filter_employees_by_year_of_birth(employees):
 # - and create a json file using some of the fields
 # - the JSON file
 @dag(
-    dag_id="10_employee_data_simulator",
+    dag_id="10_employee_data_original",
     description="DAG for employees - PoC",
     start_date=datetime(2022, 3, 1, 2),
     schedule_interval="@daily",
@@ -54,7 +64,7 @@ def employees():
     @task
     def data_validation(ti=None):
         original_employees = read_csv(EMPLOYEE_INPUT_CSV_FILE)
-        oldies_file = f"./dags/results/oldies_{now()}.json"
+        oldies_file = f"./dags/results/oldies.json"
         filter_employees_by_year_of_birth(original_employees) \
             .filter(items=["UserId", "FirstName", "LastName"]) \
             .to_json(oldies_file, orient="records")
@@ -70,14 +80,15 @@ def employees():
         })
         original_employees \
             .to_sql("employees", con=engine,
-                    if_exists="replace", index=False)
+                    if_exists="replace", index=False, chunksize=500)
 
     @task
     def read_employees():
         query_employees = read_sql_query('''
             SELECT id, first_name, last_name FROM "employees";
         ''', engine)
-        DataFrame(query_employees).to_csv(EMPLOYEES_OUTPUT_CSV_FILE)
+        DataFrame(query_employees) \
+            .to_csv(EMPLOYEES_OUTPUT_CSV_FILE, chunksize=500)
 
     data_validation() >> insert_employees() >> read_employees()
 
